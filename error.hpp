@@ -14,6 +14,7 @@ class Error {
         NoSuchFile,
         FileExists,
         FileOpened,
+        FileNotOpened,
         // block
         NotMBR,
         NotGPT,

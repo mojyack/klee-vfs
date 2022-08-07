@@ -13,7 +13,7 @@ class Controller {
   private:
     basic::Driver basic_driver;
 
-    OpenInfo root;
+    OpenInfo& root;
 
     auto follow_mountpoints(fs::OpenInfo* info) -> fs::OpenInfo* {
         while(info->mount != nullptr) {
@@ -23,7 +23,7 @@ class Controller {
     }
 
   public:
-    auto open(const std::string_view path, const OpenMode mode) -> Result<int> {
+    auto open(const std::string_view path, const OpenMode mode) -> Result<OpenInfo*> {
         auto elms                = split_path(path);
         auto info                = follow_mountpoints(&root);
         auto existing_info_stack = std::vector<OpenInfo*>{info};
@@ -35,7 +35,7 @@ class Controller {
                 existing_info_stack.emplace_back(info);
                 continue;
             }
-            auto find_result = info->driver->find(info->driver_data, *e);
+            auto find_result = info->find(*e);
             if(!find_result) {
                 return find_result.as_error();
             }
@@ -43,27 +43,53 @@ class Controller {
             info    = &p; // not follow_mountpoints(&p), since find_result is created here and should not be a mountpoint.
         }
 
+        // the file is already write opened
         if(info->write_count >= 1) {
             return Error::Code::FileOpened;
         }
 
-        for(auto i = 0; i < elms.size() - 1; i += 1) {
-            if(i < existing_info_stack.size()) {
-                existing_info_stack[i]->child_count += 1;
+        // cannot modify read opened file
+        if(info->read_count >= 1 && mode != OpenMode::Read) {
+            return Error::Code::FileOpened;
+        }
+
+        // create node
+        auto last = existing_info_stack.back();
+        for(auto i = 0; i < created_info_stack.size(); i += 1) {
+            last = &last->children.emplace(created_info_stack[i].name, created_info_stack[i]).first->second;
+            if(i != created_info_stack.size() - 1) {
+                last->child_count += 1;
             }
         }
-        for(auto e = elms.begin(); e != elms.end(); e += 1) {
-            auto& children = info->children;
-            if(const auto p = children.find(std::string(*e)); p != children.end()) {
-                info = &p->second;
-                continue;
+        // also update counts of existing nodes
+        for(auto i : existing_info_stack) {
+            if(&(*i) != last) {
+                i->child_count += 1;
             }
         }
+
+        switch(mode) {
+        case OpenMode::Read:
+            last->read_count += 1;
+            break;
+        case OpenMode::Write:
+            last->write_count += 1;
+        }
+
+        return last;
     }
 
     auto mount(const std::string_view path, Driver& driver) {
         const auto elms            = split_path(path);
         auto       open_info_stack = std::vector<OpenInfo>();
+    }
+
+    auto _root_mount(Driver& driver) {
+        root.mount = &driver.get_root();
+    }
+
+    auto _compare_root(const OpenInfo::Testdata& data) -> bool {
+        return root.test_compare(data);
     }
 
     Controller() : root(basic_driver.get_root()) {}
