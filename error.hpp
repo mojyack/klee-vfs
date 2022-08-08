@@ -6,11 +6,13 @@ class Error {
     enum class Code : int {
         Success = 0,
         IndexOutOfRange,
+        NotImplemented,
         // filesystem
         IOError,
         InvalidData,
         InvalidSector,
         NotDirectory,
+        NotFile,
         NoSuchFile,
         FileExists,
         FileOpened,
@@ -18,6 +20,7 @@ class Error {
         VolumeMounted,
         VolumeBusy,
         NotMounted,
+        EndOfFile,
         // block
         NotMBR,
         NotGPT,

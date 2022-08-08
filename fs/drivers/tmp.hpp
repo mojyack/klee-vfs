@@ -4,6 +4,7 @@
 #include <variant>
 #include <vector>
 
+#include "../../memory-manager.hpp"
 #include "../fs.hpp"
 
 namespace fs::tmp {
@@ -20,11 +21,88 @@ class Object {
     }
 };
 
+class File;
+class Directory;
+
+template <class T>
+concept FileObject = std::is_same_v<T, File> || std::is_same_v<T, Directory>;
+
 class File : public Object {
   private:
-    std::vector<uint8_t> data;
+    size_t                    filesize = 0;
+    std::vector<SmartFrameID> data;
+
+    auto data_at(const size_t index) -> uint8_t* {
+        return static_cast<uint8_t*>(data[index]->get_frame());
+    }
+
+    template <bool reverse>
+    auto memory_copy(std::conditional_t<!reverse, void*, const void*> a, std::conditional_t<!reverse, const void*, void*> b, const size_t len) -> void {
+        if constexpr(!reverse) {
+            memcpy(a, b, len);
+        } else {
+            memcpy(b, a, len);
+        }
+    }
+
+    template <bool write>
+    auto copy(const size_t offset, size_t size, std::conditional_t<write, const uint8_t*, uint8_t*> buffer) -> Error {
+        if(offset + size > filesize) {
+            return Error::Code::EndOfFile;
+        }
+
+        auto frame_index = offset / bytes_per_frame;
+
+        {
+            const auto offset_in_frame = offset % bytes_per_frame;
+            const auto size_in_frame   = bytes_per_frame - offset_in_frame;
+            const auto copy_len        = size < size_in_frame ? size : size_in_frame;
+            memory_copy<write>(buffer, data_at(frame_index) + offset_in_frame, copy_len);
+            buffer += copy_len;
+            size -= copy_len;
+        }
+
+        while(size >= bytes_per_frame) {
+            memory_copy<write>(buffer, data_at(frame_index), bytes_per_frame);
+            buffer += bytes_per_frame;
+            size -= bytes_per_frame;
+            frame_index += 1;
+        }
+
+        memory_copy<write>(buffer, data_at(frame_index), size);
+        return Error::Code::InvalidData;
+    }
 
   public:
+    auto read(const size_t offset, const size_t size, uint8_t* const buffer) -> Error {
+        return copy<false>(offset, size, static_cast<uint8_t*>(buffer));
+    }
+
+    auto write(const size_t offset, const size_t size, const void* const buffer) -> Error {
+        return copy<true>(offset, size, static_cast<const uint8_t*>(buffer));
+    }
+
+    auto resize(const size_t new_size) -> Error {
+        const auto new_data_size = (new_size + bytes_per_frame - 1) / bytes_per_frame;
+        const auto old_data_size = data.size();
+        if(new_data_size > old_data_size) {
+            auto new_frames = std::vector<SmartFrameID>(new_data_size - old_data_size);
+            for(auto& f : new_frames) {
+                auto frame = allocator->allocate(1);
+                if(!frame) {
+                    return frame.as_error();
+                }
+                f = SmartFrameID(frame.as_value(), 1);
+            }
+            data.reserve(new_data_size);
+            std::move(std::begin(new_frames), std::end(new_frames), std::back_inserter(data));
+        } else if(new_data_size < old_data_size) {
+            data.resize(new_data_size);
+        }
+        filesize = new_size;
+        return Error();
+    }
+
     File(std::string name) : Object(std::move(name)) {}
 };
 
@@ -41,8 +119,9 @@ class Directory : public Object {
         return p != children.end() ? &p->second : nullptr;
     }
 
-    auto mkdir(const std::string_view name) -> void {
-        children.emplace(std::string(name), Directory(std::string(name)));
+    template <FileObject T>
+    auto create(const std::string_view name) -> uintptr_t {
+        return reinterpret_cast<uintptr_t>(&children.emplace(std::string(name), T(std::string(name))).first->second);
     }
 
     auto remove(const std::string_view name) -> bool {
@@ -73,46 +152,61 @@ class Driver : public fs::Driver {
     std::variant<File, Directory> data;
     OpenInfo                      root;
 
-    auto data_as_directory(const uintptr_t data) -> Result<Directory*> {
+    template <FileObject T>
+    auto data_as(const uintptr_t data) -> Result<T*> {
         auto& obj = *reinterpret_cast<std::variant<File, Directory>*>(data);
-        if(!std::holds_alternative<Directory>(obj)) {
-            return Error::Code::NotDirectory;
+        if(!std::holds_alternative<T>(obj)) {
+            return std::is_same_v<T, File> ? Error::Code::NotFile : Error::Code::NotDirectory;
         }
-        return &std::get<Directory>(obj);
+        return &std::get<T>(obj);
     }
 
   public:
     auto read(const uintptr_t data, const size_t offset, const size_t size, void* const buffer) -> Error override {
-        return Error::Code::InvalidData;
+        unwrap(file, data_as<File>(data));
+        return file->read(offset, size, static_cast<uint8_t*>(buffer));
     }
 
     auto write(const uintptr_t data, const size_t offset, const size_t size, const void* const buffer) -> Error override {
-        return Error::Code::InvalidData;
+        unwrap(file, data_as<File>(data));
+        file->resize(offset + size);
+        return file->write(offset, size, static_cast<const uint8_t*>(buffer));
     }
 
     auto find(const uintptr_t data, const std::string_view name) -> Result<OpenInfo> override {
-        unwrap(dir, data_as_directory(data));
+        unwrap(dir, data_as<Directory>(data));
         const auto p = dir->find(name);
         return p != nullptr ? Result(OpenInfo(name, *this, p)) : Error::Code::NoSuchFile;
     }
 
-    auto mkdir(const uintptr_t data, const std::string_view name) -> Error override {
-        unwrap(dir, data_as_directory(data));
+    auto create(const uintptr_t data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
+        unwrap(dir, data_as<Directory>(data));
         if(dir->find(name) != nullptr) {
             return Error::Code::FileExists;
         }
-        dir->mkdir(name);
-        return Error();
+
+        auto v = uintptr_t();
+        switch(type) {
+        case FileType::Regular:
+            v = dir->create<File>(name);
+            break;
+        case FileType::Directory:
+            v = dir->create<Directory>(name);
+            break;
+        default:
+            return Error::Code::NotImplemented;
+        }
+        return OpenInfo(name, *this, v);
     }
 
     auto readdir(const uintptr_t data, const size_t index) -> Result<OpenInfo> override {
-        unwrap(dir, data_as_directory(data));
+        unwrap(dir, data_as<Directory>(data));
         unwrap(child, dir->find_nth(index));
         return OpenInfo(child.first, *this, &child.second);
     }
 
     auto remove(const uintptr_t data, const std::string_view name) -> Error override {
-        unwrap(dir, data_as_directory(data));
+        unwrap(dir, data_as<Directory>(data));
         if(!dir->remove(name)) {
             return Error::Code::NoSuchFile;
         }

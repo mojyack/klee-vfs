@@ -9,6 +9,11 @@
 #include "../log.hpp"
 
 namespace fs {
+enum class FileType {
+    Regular,
+    Directory,
+};
+
 class Driver;
 
 class OpenInfo {
@@ -38,7 +43,7 @@ class OpenInfo {
     auto read(size_t offset, size_t size, void* buffer) -> Error;
     auto write(size_t offset, size_t size, const void* buffer) -> Error;
     auto find(std::string_view name) -> Result<OpenInfo>;
-    auto mkdir(std::string_view name) -> Error;
+    auto create(std::string_view name, FileType type) -> Result<OpenInfo>;
     auto readdir(size_t index) -> Result<OpenInfo>;
     auto remove(std::string_view name) -> Error;
 
@@ -105,10 +110,10 @@ class Driver {
     virtual auto read(uintptr_t data, size_t offset, size_t size, void* buffer) -> Error        = 0;
     virtual auto write(uintptr_t data, size_t offset, size_t size, const void* buffer) -> Error = 0;
 
-    virtual auto find(uintptr_t data, std::string_view name) -> Result<OpenInfo> = 0;
-    virtual auto mkdir(uintptr_t data, std::string_view name) -> Error           = 0;
-    virtual auto readdir(uintptr_t data, size_t index) -> Result<OpenInfo>       = 0;
-    virtual auto remove(uintptr_t data, std::string_view name) -> Error          = 0;
+    virtual auto find(uintptr_t data, std::string_view name) -> Result<OpenInfo>                  = 0;
+    virtual auto create(uintptr_t data, std::string_view name, FileType type) -> Result<OpenInfo> = 0;
+    virtual auto readdir(uintptr_t data, size_t index) -> Result<OpenInfo>                        = 0;
+    virtual auto remove(uintptr_t data, std::string_view name) -> Error                           = 0;
 
     virtual auto get_root() -> OpenInfo& = 0;
 
@@ -141,11 +146,11 @@ inline auto OpenInfo::find(const std::string_view name) -> Result<OpenInfo> {
     return r;
 }
 
-inline auto OpenInfo::mkdir(const std::string_view name) -> Error {
+inline auto OpenInfo::create(const std::string_view name, const FileType type) -> Result<OpenInfo> {
     if(!check_opened(true)) {
         return Error::Code::FileNotOpened;
     }
-    return driver->mkdir(driver_data, name);
+    return driver->create(driver_data, name, type);
 }
 
 inline auto OpenInfo::readdir(const size_t index) -> Result<OpenInfo> {

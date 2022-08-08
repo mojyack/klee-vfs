@@ -19,7 +19,7 @@ class Driver : public fs::Driver {
         return Error::Code::InvalidData;
     }
 
-    auto mkdir(const uintptr_t data, const std::string_view name) -> Error override {
+    auto create(const uintptr_t data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
         return Error::Code::InvalidData;
     }
 

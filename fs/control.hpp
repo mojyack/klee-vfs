@@ -9,6 +9,35 @@ enum class OpenMode {
     Write,
 };
 
+inline auto follow_mountpoints(fs::OpenInfo* info) -> fs::OpenInfo* {
+    while(info->mount != nullptr) {
+        info = info->mount;
+    }
+    return info;
+}
+
+inline auto try_open(fs::OpenInfo* const info, const OpenMode mode) -> Error {
+    // the file is already write opened
+    if(info->write_count >= 1) {
+        return Error::Code::FileOpened;
+    }
+
+    // cannot modify read opened file
+    if(info->read_count >= 1 && mode != OpenMode::Read) {
+        return Error::Code::FileOpened;
+    }
+
+    switch(mode) {
+    case OpenMode::Read:
+        info->read_count += 1;
+        break;
+    case OpenMode::Write:
+        info->write_count += 1;
+    }
+
+    return Error();
+}
+
 class Controller;
 
 class Handle {
@@ -38,15 +67,48 @@ class Handle {
         return data->write(offset, size, buffer);
     }
 
+    auto open(const std::string_view name, const OpenMode mode) -> Result<Handle> {
+        auto& children     = data->children;
+        auto  created_info = std::optional<OpenInfo>();
+        auto  result       = (OpenInfo*)(nullptr);
+        if(const auto p = children.find(std::string(name)); p != children.end()) {
+            result = follow_mountpoints(&p->second);
+        } else {
+            auto find_result = data->find(name);
+            if(!find_result) {
+                return find_result.as_error();
+            }
+            result = &created_info.emplace(find_result.as_value());
+        }
+
+        if(const auto e = try_open(result, mode)) {
+            return e;
+        }
+
+        if(created_info) {
+            auto& v = created_info.value();
+            result = &children.emplace(v.name, v).first->second;
+        }
+
+        auto node = result->parent;
+        while(node != nullptr) {
+            node->child_count += 1;
+            node = node->parent;
+        }
+
+        return Handle(result, mode);
+    }
+
     auto find(const std::string_view name) -> Result<OpenInfo> {
         return data->find(name);
     }
 
-    auto mkdir(const std::string_view name) -> Error {
+    auto create(const std::string_view name, const FileType type) -> Error {
         if(!is_write_opened()) {
             return Error::Code::FileNotOpened;
         }
-        return data->mkdir(name);
+        const auto r = data->create(name, type);
+        return r ? Error() : r.as_error();
     }
 
     auto readdir(const size_t index) -> Result<OpenInfo> {
@@ -71,68 +133,42 @@ class Controller {
     OpenInfo&              root;
     std::vector<MountData> mount_list;
 
-    auto follow_mountpoints(fs::OpenInfo* info) -> fs::OpenInfo* {
-        while(info->mount != nullptr) {
-            info = info->mount;
+    auto open_root(const OpenMode mode) -> Result<Handle> {
+        auto info = follow_mountpoints(&root);
+        if(const auto e = try_open(info, mode)) {
+            return e;
         }
-        return info;
+        return Handle(info, mode);
     }
 
   public:
     auto open(const std::string_view path, const OpenMode mode) -> Result<Handle> {
-        auto elms                = split_path(path);
-        auto info                = follow_mountpoints(&root);
-        auto existing_info_stack = std::vector<OpenInfo*>{info};
-        auto created_info_stack  = std::vector<OpenInfo>();
-        for(auto e = elms.begin(); e != elms.end(); e += 1) {
-            auto& children = info->children;
-            if(const auto p = children.find(std::string(*e)); p != children.end()) {
-                info = follow_mountpoints(&p->second);
-                existing_info_stack.emplace_back(info);
-                continue;
-            }
-            auto find_result = info->find(*e);
-            if(!find_result) {
-                return find_result.as_error();
-            }
-            auto& p = created_info_stack.emplace_back(find_result.as_value());
-            info    = &p; // not follow_mountpoints(&p), since find_result is created here and should not be a mountpoint.
+        auto elms     = split_path(path);
+        if(elms.empty()) {
+            return open_root(mode);
         }
 
-        // the file is already write opened
-        if(info->write_count >= 1) {
-            return Error::Code::FileOpened;
+        auto dirname  = std::span<std::string_view>(elms.begin(), elms.size() - 1);
+        auto filename = elms.back();
+
+        auto result = open_root(OpenMode::Read);
+        if(!result) {
+            return result.as_error();
         }
 
-        // cannot modify read opened file
-        if(info->read_count >= 1 && mode != OpenMode::Read) {
-            return Error::Code::FileOpened;
-        }
-
-        // create node
-        auto last = existing_info_stack.back();
-        for(auto i = 0; i < created_info_stack.size(); i += 1) {
-            last = &last->children.emplace(created_info_stack[i].name, created_info_stack[i]).first->second;
-            if(i != created_info_stack.size() - 1) {
-                last->child_count += 1;
-            }
-        }
-        // also update counts of existing nodes
-        for(auto i : existing_info_stack) {
-            if(&(*i) != last) {
-                i->child_count += 1;
+        for(const auto& d : dirname) {
+            auto handle = result.as_value();
+            result      = handle.open(d, OpenMode::Read);
+            close(handle);
+            if(!result) {
+                return result.as_error();
             }
         }
 
-        switch(mode) {
-        case OpenMode::Read:
-            last->read_count += 1;
-            break;
-        case OpenMode::Write:
-            last->write_count += 1;
-        }
-
-        return Handle(last, mode);
+        auto handle = result.as_value();
+        result      = handle.open(filename, mode);
+        close(handle);
+        return result;
     }
 
     auto close(Handle handle) -> Error {
