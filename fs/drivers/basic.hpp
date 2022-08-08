@@ -27,10 +27,14 @@ class Driver : public fs::Driver {
         return Error::Code::InvalidData;
     }
 
+    auto remove(const uintptr_t data, const std::string_view name) -> Error override {
+        return Error::Code::InvalidData;
+    }
+
     auto get_root() -> OpenInfo& override {
         return root;
     }
 
-    Driver() : root("/", *this, nullptr) {}
+    Driver() : root("/", *this, nullptr, true) {}
 };
 } // namespace fs::basic

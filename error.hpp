@@ -16,6 +16,8 @@ class Error {
         FileOpened,
         FileNotOpened,
         VolumeMounted,
+        VolumeBusy,
+        NotMounted,
         // block
         NotMBR,
         NotGPT,

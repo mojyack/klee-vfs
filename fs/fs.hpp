@@ -15,6 +15,7 @@ class OpenInfo {
   private:
     Driver*   driver;
     uintptr_t driver_data;
+    bool      volume_root;
 
     auto check_opened(const bool write) -> bool {
         if((write && write_count == 0) || (!write && read_count == 0 && write_count == 0)) {
@@ -39,14 +40,20 @@ class OpenInfo {
     auto find(std::string_view name) -> Result<OpenInfo>;
     auto mkdir(std::string_view name) -> Error;
     auto readdir(size_t index) -> Result<OpenInfo>;
+    auto remove(std::string_view name) -> Error;
 
-    auto is_opened() const -> bool {
-        return read_count != 0 || write_count != 0 || child_count != 0;
+    auto is_busy() const -> bool {
+        return read_count != 0 || write_count != 0 || child_count != 0 || mount != nullptr;
     }
 
-    OpenInfo(const std::string_view name, Driver& driver, const auto driver_data) : driver(&driver),
-                                                                                    driver_data(reinterpret_cast<uintptr_t>(driver_data)),
-                                                                                    name(name) {}
+    auto is_volume_root() const -> bool {
+        return volume_root;
+    }
+
+    OpenInfo(const std::string_view name, Driver& driver, const auto driver_data, const bool volume_root = false) : driver(&driver),
+                                                                                                                    driver_data(reinterpret_cast<uintptr_t>(driver_data)),
+                                                                                                                    volume_root(volume_root),
+                                                                                                                    name(name) {}
 
     // test stuff
     struct Testdata {
@@ -101,6 +108,7 @@ class Driver {
     virtual auto find(uintptr_t data, std::string_view name) -> Result<OpenInfo> = 0;
     virtual auto mkdir(uintptr_t data, std::string_view name) -> Error           = 0;
     virtual auto readdir(uintptr_t data, size_t index) -> Result<OpenInfo>       = 0;
+    virtual auto remove(uintptr_t data, std::string_view name) -> Error          = 0;
 
     virtual auto get_root() -> OpenInfo& = 0;
 
@@ -150,5 +158,15 @@ inline auto OpenInfo::readdir(const size_t index) -> Result<OpenInfo> {
         r.as_value().parent = this;
     }
     return r;
+}
+
+inline auto OpenInfo::remove(const std::string_view name) -> Error {
+    if(!check_opened(true)) {
+        return Error::Code::FileNotOpened;
+    }
+    if(children.find(std::string(name)) != children.end()) {
+        return Error::Code::FileOpened;
+    }
+    return driver->remove(driver_data, name);
 }
 } // namespace fs

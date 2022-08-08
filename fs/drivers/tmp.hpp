@@ -45,6 +45,10 @@ class Directory : public Object {
         children.emplace(std::string(name), Directory(std::string(name)));
     }
 
+    auto remove(const std::string_view name) -> bool {
+        return children.erase(std::string(name)) != 0;
+    }
+
     auto find_nth(const size_t index) const -> Result<std::pair<const std::string&, const std::variant<File, Directory>&>> {
         if(index >= children.size()) {
             return Error::Code::IndexOutOfRange;
@@ -107,12 +111,20 @@ class Driver : public fs::Driver {
         return OpenInfo(child.first, *this, &child.second);
     }
 
+    auto remove(const uintptr_t data, const std::string_view name) -> Error override {
+        unwrap(dir, data_as_directory(data));
+        if(!dir->remove(name)) {
+            return Error::Code::NoSuchFile;
+        }
+        return Error();
+    }
+
     auto get_root() -> OpenInfo& override {
         return root;
     }
 
     Driver() : data(Directory("/")),
-               root("/", *this, &data) {}
+               root("/", *this, &data, true) {}
 };
 
 #undef unwrap

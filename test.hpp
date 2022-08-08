@@ -1,8 +1,8 @@
 #include "fs/control.hpp"
 
-#define open_handle(var, expr)   \
+#define open_handle(var, expr)     \
     auto var##_open_result = expr; \
-    assert(var##_open_result);                   \
+    assert(var##_open_result);     \
     auto& var = var##_open_result.as_value();
 
 #define assert(a)                                        \
@@ -27,17 +27,45 @@ inline auto tdc(const std::string_view path, const uint32_t read, const uint32_t
     return r;
 }
 
-inline auto test_mount() -> bool {
+inline auto test_nested_mount() -> bool {
     auto controller = fs::Controller();
-    auto tmpfs      = fs::tmp::Driver();
-    assert(!controller.mount("/", tmpfs));
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0, {}))));
+    assert(controller._compare_root(tdc("/", 0, 0, 0)));
+    auto tmpfs1 = fs::tmp::Driver();
+    assert(!controller.mount("/", tmpfs1));
+    open_handle(root, controller.open("/", fs::OpenMode::Write));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 1, 0))));
+
+    assert(!root.mkdir("tmp"));
+    auto tmpfs2 = fs::tmp::Driver();
+    assert(!controller.mount("/tmp", tmpfs2));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 1, 1, nomount, {
+                                                                                              tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 0, 0)),
+                                                                                          }))));
+
+    auto tmpfs3 = fs::tmp::Driver();
+    assert(!controller.mount("/tmp", tmpfs3));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 1, 2, nomount, {
+                                                                                              tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 1, 0, tdc(/*tmp3*/ "/", 0, 0, 0))),
+                                                                                          }))));
+
+    assert(!controller.unmount("/tmp"));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 1, 1, nomount, {
+                                                                                              tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 0, 0)),
+                                                                                          }))));
+
+    assert(!controller.unmount("/tmp"));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 1, 0))));
+
+    assert(!controller.close(root));
+    assert(!controller.unmount("/"));
+    assert(controller._compare_root(tdc("/", 0, 0, 0)));
     return true;
 }
 
 inline auto test_nested_open_close() -> bool {
     auto controller = fs::Controller();
-    auto tmpfs      = fs::tmp::Driver();
+    assert(controller._compare_root(tdc("/", 0, 0, 0)));
+    auto tmpfs = fs::tmp::Driver();
     assert(!controller.mount("/", tmpfs));
     assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0))));
 
@@ -82,13 +110,23 @@ inline auto test_nested_open_close() -> bool {
                                                                                      tdc("dir2", 1, 0, 0),
                                                                                  }))));
 
-    // close "/dir2"
+    // close and remove "/dir2"
+    assert(root.remove("dir2") == Error::Code::FileOpened);
     assert(!controller.close(root_dir2));
     assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 2, nomount, {
                                                                                      tdc("dir", 0, 1, 1, nomount, {
                                                                                                                       tdc("dir", 1, 0, 0),
                                                                                                                   }),
                                                                                  }))));
+    assert(!root.remove("dir2"));
+    assert(controller.open("/dir2", fs::OpenMode::Read).as_error() == Error::Code::NoSuchFile);
+
+    // close and remove all directories
+    assert(!controller.close(root_dir_dir));
+    assert(!controller.close(root_dir));
+    assert(!root.remove("dir"));
+    assert(!controller.close(root));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0))));
 
     return true;
 }
@@ -118,6 +156,7 @@ inline auto test_exist_error() -> bool {
 }
 
 inline auto test() -> bool {
+    assert(test_nested_mount());
     assert(test_nested_open_close());
     assert(test_open_error());
     assert(test_exist_error());
