@@ -42,10 +42,10 @@ auto main(const int argc, const char* const argv[]) -> int {
         printf("partition found: %luMib Type=%d\n", info.bytes_per_sector * info.total_sectors / 1024 / 1024, p.filesystem);
     }
 
-    auto controller = fs::Controller();
-    auto tmpfs      = fs::tmp::Driver();
-    controller._root_mount(tmpfs);
     test();
-    prompt(controller);
+    // auto controller = fs::Controller();
+    // auto tmpfs      = fs::tmp::Driver();
+    // controller._root_mount(tmpfs);
+    // prompt(controller);
     return 0;
 }

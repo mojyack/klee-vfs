@@ -9,11 +9,63 @@ enum class OpenMode {
     Write,
 };
 
+class Controller;
+
+class Handle {
+    friend class Controller;
+
+  private:
+    OpenInfo* data;
+    OpenMode  mode;
+
+    auto is_write_opened() -> bool {
+        if(mode != OpenMode::Write) {
+            logger(LogLevel::Error, "attempt to write to ro opened file \"%s\"\n", data->name.data());
+            return false;
+        }
+        return true;
+    }
+
+  public:
+    auto read(const size_t offset, const size_t size, void* const buffer) -> Error {
+        return data->read(offset, size, buffer);
+    }
+
+    auto write(const size_t offset, const size_t size, const void* const buffer) -> Error {
+        if(!is_write_opened()) {
+            return Error::Code::FileNotOpened;
+        }
+        return data->write(offset, size, buffer);
+    }
+
+    auto find(const std::string_view name) -> Result<OpenInfo> {
+        return data->find(name);
+    }
+
+    auto mkdir(const std::string_view name) -> Error {
+        if(!is_write_opened()) {
+            return Error::Code::FileNotOpened;
+        }
+        return data->mkdir(name);
+    }
+
+    auto readdir(const size_t index) -> Result<OpenInfo> {
+        return data->readdir(index);
+    }
+
+    Handle(OpenInfo* const data, const OpenMode mode) : data(data), mode(mode) {}
+};
+
 class Controller {
   private:
-    basic::Driver basic_driver;
+    struct MountData {
+        std::string path;
+        OpenInfo*   handle;
+    };
 
-    OpenInfo& root;
+    basic::Driver          basic_driver;
+    OpenInfo&              root;
+    std::vector<MountData> mount_list;
 
     auto follow_mountpoints(fs::OpenInfo* info) -> fs::OpenInfo* {
         while(info->mount != nullptr) {
@@ -23,7 +75,7 @@ class Controller {
     }
 
   public:
-    auto open(const std::string_view path, const OpenMode mode) -> Result<OpenInfo*> {
+    auto open(const std::string_view path, const OpenMode mode) -> Result<Handle> {
         auto elms                = split_path(path);
         auto info                = follow_mountpoints(&root);
         auto existing_info_stack = std::vector<OpenInfo*>{info};
@@ -76,16 +128,45 @@ class Controller {
             last->write_count += 1;
         }
 
-        return last;
+        return Handle(last, mode);
     }
 
-    auto mount(const std::string_view path, Driver& driver) {
-        const auto elms            = split_path(path);
-        auto       open_info_stack = std::vector<OpenInfo>();
+    auto close(Handle handle) -> Error {
+        auto node = handle.data;
+        switch(handle.mode) {
+        case OpenMode::Read:
+            node->read_count -= 1;
+            break;
+        case OpenMode::Write:
+            node->write_count -= 1;
+            break;
+        }
+        node->child_count += 1; // prevents the child_count of the trailing node from being decremented
+        while(node != nullptr) {
+            node->child_count -= 1;
+            auto parent = node->parent;
+            if(!node->is_opened() && parent != nullptr) {
+                parent->children.erase(node->name);
+            }
+            node = parent;
+        }
+        return Error();
     }
 
-    auto _root_mount(Driver& driver) {
-        root.mount = &driver.get_root();
+    auto mount(const std::string_view path, Driver& driver) -> Error {
+        auto device_root = &driver.get_root();
+        if(device_root->parent != nullptr) {
+            return Error::Code::VolumeMounted;
+        }
+
+        auto open_result = open(path, OpenMode::Write);
+        if(!open_result) {
+            return open_result.as_error();
+        }
+        const auto handle   = open_result.as_value();
+        handle.data->mount  = device_root;
+        device_root->parent = handle.data->parent;
+        return Error();
     }
 
     auto _compare_root(const OpenInfo::Testdata& data) -> bool {

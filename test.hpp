@@ -1,57 +1,94 @@
 #include "fs/control.hpp"
 
-#define assert(a)                 \
-    if(!(a)) {                    \
-        puts("test failed: " #a); \
-        return false;             \
+#define open_handle(var, expr)   \
+    auto var##_open_result = expr; \
+    assert(var##_open_result);                   \
+    auto& var = var##_open_result.as_value();
+
+#define assert(a)                                        \
+    if(!(a)) {                                           \
+        printf("test failed at %d: " #a "\n", __LINE__); \
+        return false;                                    \
     }
 
-inline auto test_nested_dir() -> bool {
+using Testdata         = fs::OpenInfo::Testdata;
+constexpr auto nomount = std::nullopt;
+
+// test data construction
+inline auto tdc(const std::string_view path, const uint32_t read, const uint32_t write, const uint32_t child, std::optional<Testdata> mount = nomount, std::vector<Testdata> children = {}) -> Testdata {
+    auto r = Testdata{std::string(path), read, write, child, {}, {}};
+    if(mount) {
+        r.mount.reset(new fs::OpenInfo::Testdata);
+        *r.mount.get() = std::move(mount.value());
+    }
+    for(auto& c : children) {
+        r.children[c.name] = std::move(c);
+    }
+    return r;
+}
+
+inline auto test_mount() -> bool {
     auto controller = fs::Controller();
     auto tmpfs      = fs::tmp::Driver();
-    controller._root_mount(tmpfs);
+    assert(!controller.mount("/", tmpfs));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0, {}))));
+    return true;
+}
 
-    auto root = controller.open("/", fs::OpenMode::Write);
-    assert(root);
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 0, {}}));
+inline auto test_nested_open_close() -> bool {
+    auto controller = fs::Controller();
+    auto tmpfs      = fs::tmp::Driver();
+    assert(!controller.mount("/", tmpfs));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0))));
 
-    assert(!root.as_value()->mkdir("dir"));
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 0, {}}));
+    // mkdir "/dir"
+    open_handle(root, controller.open("/", fs::OpenMode::Write));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 0))));
 
-    auto root_dir = controller.open("/dir", fs::OpenMode::Write);
-    assert(root_dir);
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 1, {
-                                                                             {"dir", {"dir", 0, 1, 0}},
-                                                                         }}));
+    assert(!root.mkdir("dir"));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 0))));
 
-    assert(!root_dir.as_value()->mkdir("dir"));
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 1, {
-                                                                             {"dir", {"dir", 0, 1, 0}},
-                                                                         }}));
+    // mkdir "/dir/dir"
+    open_handle(root_dir, controller.open("/dir", fs::OpenMode::Write));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 1, nomount, {
+                                                                                     tdc("dir", 0, 1, 0),
+                                                                                 }))));
 
-    auto root_dir_dir = controller.open("/dir/dir", fs::OpenMode::Read);
-    assert(root_dir_dir);
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 2, {
-                                                                             {"dir", {"dir", 0, 1, 1, {
-                                                                                                          {"dir", {"dir", 1, 0, 0}},
-                                                                                                      }}},
-                                                                         }}));
+    assert(!root_dir.mkdir("dir"));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 1, nomount, {
+                                                                                     tdc("dir", 0, 1, 0),
+                                                                                 }))));
 
-    assert(!root.as_value()->mkdir("dir2"));
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 2, {
-                                                                             {"dir", {"dir", 0, 1, 1, {
-                                                                                                          {"dir", {"dir", 1, 0, 0}},
-                                                                                                      }}},
-                                                                         }}));
+    open_handle(root_dir_dir, controller.open("/dir/dir", fs::OpenMode::Read));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 2, nomount, {
+                                                                                     tdc("dir", 0, 1, 1, nomount, {
+                                                                                                                      tdc("dir", 1, 0, 0),
+                                                                                                                  }),
+                                                                                 }))));
 
-    auto root_dir2 = controller.open("/dir2", fs::OpenMode::Read);
-    assert(root_dir2);
-    assert(controller._compare_root(fs::OpenInfo::Testdata{"/", 0, 1, 3, {
-                                                                             {"dir", {"dir", 0, 1, 1, {
-                                                                                                          {"dir", {"dir", 1, 0, 0}},
-                                                                                                      }}},
-                                                                             {"dir2", {"dir2", 1, 0, 0, {}}},
-                                                                         }}));
+    // mkdir "/dir2"
+    assert(!root.mkdir("dir2"));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 2, nomount, {
+                                                                                     tdc("dir", 0, 1, 1, nomount, {
+                                                                                                                      tdc("dir", 1, 0, 0),
+                                                                                                                  }),
+                                                                                 }))));
+
+    open_handle(root_dir2, controller.open("/dir2", fs::OpenMode::Read));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 3, nomount, {
+                                                                                     tdc("dir", 0, 1, 1, nomount, {
+                                                                                                                      tdc("dir", 1, 0, 0),
+                                                                                                                  }),
+                                                                                     tdc("dir2", 1, 0, 0),
+                                                                                 }))));
+
+    // close "/dir2"
+    assert(!controller.close(root_dir2));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 1, 2, nomount, {
+                                                                                     tdc("dir", 0, 1, 1, nomount, {
+                                                                                                                      tdc("dir", 1, 0, 0),
+                                                                                                                  }),
+                                                                                 }))));
 
     return true;
 }
@@ -59,19 +96,17 @@ inline auto test_nested_dir() -> bool {
 inline auto test_open_error() -> bool {
     auto controller = fs::Controller();
     auto tmpfs      = fs::tmp::Driver();
-    controller._root_mount(tmpfs);
+    controller.mount("/", tmpfs);
 
-    auto root = controller.open("/", fs::OpenMode::Read);
-    assert(root);
-
-    assert(root.as_value()->mkdir("dir") == Error::Code::FileNotOpened);
+    open_handle(root, controller.open("/", fs::OpenMode::Read));
+    assert(root.mkdir("dir") == Error::Code::FileNotOpened);
     return true;
 }
 
 inline auto test_exist_error() -> bool {
     auto controller = fs::Controller();
     auto tmpfs      = fs::tmp::Driver();
-    controller._root_mount(tmpfs);
+    controller.mount("/", tmpfs);
 
     auto root = controller.open("/", fs::OpenMode::Read);
     assert(root);
@@ -83,7 +118,7 @@ inline auto test_exist_error() -> bool {
 }
 
 inline auto test() -> bool {
-    assert(test_nested_dir());
+    assert(test_nested_open_close());
     assert(test_open_error());
     assert(test_exist_error());
     puts("all tests passed\n");
@@ -91,3 +126,4 @@ inline auto test() -> bool {
 }
 
 #undef assert
+#undef open_handle

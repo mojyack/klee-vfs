@@ -29,8 +29,8 @@ class OpenInfo {
     uint32_t    read_count  = 0;
     uint32_t    write_count = 0;
     uint32_t    child_count = 0;
-    OpenInfo*   parent;
-    OpenInfo*   mount = nullptr;
+    OpenInfo*   parent      = nullptr;
+    OpenInfo*   mount       = nullptr;
 
     std::unordered_map<std::string, OpenInfo> children;
 
@@ -40,20 +40,25 @@ class OpenInfo {
     auto mkdir(std::string_view name) -> Error;
     auto readdir(size_t index) -> Result<OpenInfo>;
 
+    auto is_opened() const -> bool {
+        return read_count != 0 || write_count != 0 || child_count != 0;
+    }
+
+    OpenInfo(const std::string_view name, Driver& driver, const auto driver_data) : driver(&driver),
+                                                                                    driver_data(reinterpret_cast<uintptr_t>(driver_data)),
+                                                                                    name(name) {}
+
     // test stuff
     struct Testdata {
         std::string                               name;
         uint32_t                                  read_count  = 0;
         uint32_t                                  write_count = 0;
         uint32_t                                  child_count = 0;
+        std::shared_ptr<Testdata>                 mount;
         std::unordered_map<std::string, Testdata> children;
     };
 
     auto test_compare(const Testdata& data) const -> bool {
-        if(mount != nullptr) {
-            return mount->test_compare(data);
-        }
-
         if(name != data.name || read_count != data.read_count || write_count != data.write_count || child_count != data.child_count) {
             return false;
         }
@@ -76,12 +81,16 @@ class OpenInfo {
             i1 = std::next(i1, 1);
             i2 = std::next(i2, 1);
         }
+
+        if(mount != nullptr) {
+            if(!data.mount) {
+                return false;
+            }
+            return mount->test_compare(*data.mount.get());
+        }
+
         return true;
     }
-
-    OpenInfo(const std::string_view name, Driver& driver, const auto driver_data) : driver(&driver),
-                                                                                    driver_data(reinterpret_cast<uintptr_t>(driver_data)),
-                                                                                    name(name) {}
 };
 
 class Driver {
