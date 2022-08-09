@@ -222,4 +222,8 @@ class Driver : public fs::Driver {
 };
 
 #undef unwrap
+
+inline auto new_driver() -> Driver {
+    return Driver();
+}
 } // namespace fs::tmp

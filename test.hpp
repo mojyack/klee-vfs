@@ -42,18 +42,18 @@ inline auto create(fs::Controller& controller, const std::string_view dirname, c
 inline auto test_nested_mount() -> bool {
     auto controller = fs::Controller();
     assert(controller._compare_root(tdc("/", 0, 0, 0)));
-    auto tmpfs1 = fs::tmp::Driver();
+    auto tmpfs1 = fs::tmp::new_driver();
     assert(!controller.mount("/", tmpfs1));
 
     assert(create(controller, "/", "tmp", fs::FileType::Directory));
 
-    auto tmpfs2 = fs::tmp::Driver();
+    auto tmpfs2 = fs::tmp::new_driver();
     assert(!controller.mount("/tmp", tmpfs2));
     assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 0, 1, nomount, {
                                                                                               tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 0, 0)),
                                                                                           }))));
 
-    auto tmpfs3 = fs::tmp::Driver();
+    auto tmpfs3 = fs::tmp::new_driver();
     assert(!controller.mount("/tmp", tmpfs3));
     assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 0, 2, nomount, {
                                                                                               tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 1, 0, tdc(/*tmp3*/ "/", 0, 0, 0))),
@@ -75,7 +75,7 @@ inline auto test_nested_mount() -> bool {
 inline auto test_nested_open_close() -> bool {
     auto controller = fs::Controller();
     assert(controller._compare_root(tdc("/", 0, 0, 0)));
-    auto tmpfs = fs::tmp::Driver();
+    auto tmpfs = fs::tmp::new_driver();
     assert(!controller.mount("/", tmpfs));
     assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0))));
 
@@ -104,7 +104,7 @@ inline auto test_nested_open_close() -> bool {
 
 inline auto test_open_error() -> bool {
     auto controller = fs::Controller();
-    auto tmpfs      = fs::tmp::Driver();
+    auto tmpfs      = fs::tmp::new_driver();
     controller.mount("/", tmpfs);
 
     open_handle(root, controller.open("/", fs::OpenMode::Read));
@@ -114,7 +114,7 @@ inline auto test_open_error() -> bool {
 
 inline auto test_exist_error() -> bool {
     auto controller = fs::Controller();
-    auto tmpfs      = fs::tmp::Driver();
+    auto tmpfs      = fs::tmp::new_driver();
     controller.mount("/", tmpfs);
 
     auto root_dir = controller.open("/dir", fs::OpenMode::Read);
@@ -125,7 +125,7 @@ inline auto test_exist_error() -> bool {
 
 inline auto test_tmpfs_rw() -> bool {
     auto controller = fs::Controller();
-    auto tmpfs      = fs::tmp::Driver();
+    auto tmpfs      = fs::tmp::new_driver();
     controller.mount("/", tmpfs);
 
     assert(create(controller, "/", "file", fs::FileType::Regular));
@@ -142,7 +142,7 @@ inline auto test_tmpfs_rw() -> bool {
 
     {
         auto buffer = std::array<uint8_t, bytes_per_frame * 3>();
-        for(auto i = 0 ; i < buffer.size(); i += 1) {
+        for(auto i = 0; i < buffer.size(); i += 1) {
             buffer[i] = i;
         }
         const auto write_head = bytes_per_frame + 1;

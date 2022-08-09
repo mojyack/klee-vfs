@@ -37,4 +37,8 @@ class Driver : public fs::Driver {
 
     Driver() : root("/", *this, nullptr, true) {}
 };
+
+inline auto new_driver() -> Driver {
+    return Driver();
+}
 } // namespace fs::basic
