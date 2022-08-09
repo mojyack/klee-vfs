@@ -1,10 +1,15 @@
 #pragma once
+#include <concepts>
 #include <unordered_map>
 
 #include "../../macro.hpp"
 #include "../block.hpp"
 
 namespace block::cache {
+template <class P>
+concept Parent = std::derived_from<P, BlockDevice>;
+
+template <Parent P>
 class Device : public BlockDevice {
   private:
     struct SectorCache {
@@ -16,7 +21,7 @@ class Device : public BlockDevice {
         }
     };
 
-    BlockDevice&                            parent;
+    P                                       parent;
     size_t                                  sector_size;
     std::unordered_map<size_t, SectorCache> cache;
 
@@ -67,7 +72,8 @@ class Device : public BlockDevice {
         return Error();
     }
 
-    Device(BlockDevice& parent) : parent(parent) {
+    template <class... Args>
+    Device(Args&&... args) : parent(std::move(args)...) {
         sector_size = parent.get_info().bytes_per_sector;
     }
 };
