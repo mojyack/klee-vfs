@@ -61,6 +61,7 @@ class File : public Object {
             memory_copy<write>(buffer, data_at(frame_index) + offset_in_frame, copy_len);
             buffer += copy_len;
             size -= copy_len;
+            frame_index += 1;
         }
 
         while(size >= bytes_per_frame) {
@@ -70,8 +71,11 @@ class File : public Object {
             frame_index += 1;
         }
 
-        memory_copy<write>(buffer, data_at(frame_index), size);
-        return Error::Code::InvalidData;
+        if(size != 0) {
+            memory_copy<write>(buffer, data_at(frame_index), size);
+        }
+
+        return Error();
     }
 
   public:
@@ -104,6 +108,10 @@ class File : public Object {
         return Error();
     }
 
+    auto get_size() const -> size_t {
+        return filesize;
+    }
+
     File(std::string name) : Object(std::move(name)) {}
 };
 
@@ -121,21 +129,21 @@ class Directory : public Object {
     }
 
     template <FileObject T>
-    auto create(const std::string_view name) -> uintptr_t {
-        return reinterpret_cast<uintptr_t>(&children.emplace(std::string(name), T(std::string(name))).first->second);
+    auto create(const std::string_view name) -> std::variant<File, Directory>* {
+        return &children.emplace(std::string(name), T(std::string(name))).first->second;
     }
 
     auto remove(const std::string_view name) -> bool {
         return children.erase(std::string(name)) != 0;
     }
 
-    auto find_nth(const size_t index) const -> Result<std::pair<const std::string&, const std::variant<File, Directory>&>> {
+    auto find_nth(const size_t index) const -> Result<const std::variant<File, Directory>*> {
         if(index >= children.size()) {
             return Error::Code::IndexOutOfRange;
         }
 
         const auto i = std::next(children.begin(), index);
-        return std::pair<const std::string&, const std::variant<File, Directory>&>{i->first, i->second};
+        return &i->second;
     }
 
     Directory(std::string name) : Object(std::move(name)) {}
@@ -155,11 +163,13 @@ class Driver : public fs::Driver {
         return &std::get<T>(obj);
     }
 
-    static auto type_from_variant(const std::variant<File, Directory>& variant) -> FileType {
+    auto create_openinfo(const std::variant<File, Directory>& variant) -> OpenInfo {
         if(std::holds_alternative<File>(variant)) {
-            return FileType::Regular;
+            auto& o = std::get<File>(variant);
+            return OpenInfo(o.get_name(), *this, &variant, FileType::Regular, o.get_size());
         } else {
-            return FileType::Directory;
+            auto& o = std::get<Directory>(variant);
+            return OpenInfo(o.get_name(), *this, &variant, FileType::Directory, 0);
         }
     }
 
@@ -178,7 +188,7 @@ class Driver : public fs::Driver {
     auto find(const DriverData data, const std::string_view name) -> Result<OpenInfo> override {
         value_or(dir, data_as<Directory>(data));
         const auto p = dir->find(name);
-        return p != nullptr ? Result(OpenInfo(name, *this, p, type_from_variant(*p))) : Error::Code::NoSuchFile;
+        return p != nullptr ? Result(create_openinfo(*p)) : Error::Code::NoSuchFile;
     }
 
     auto create(const DriverData data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
@@ -187,7 +197,7 @@ class Driver : public fs::Driver {
             return Error::Code::FileExists;
         }
 
-        auto v = uintptr_t();
+        auto v = (std::variant<File, Directory>*)nullptr;
         switch(type) {
         case FileType::Regular:
             v = dir->create<File>(name);
@@ -198,13 +208,13 @@ class Driver : public fs::Driver {
         default:
             return Error::Code::NotImplemented;
         }
-        return OpenInfo(name, *this, v, type);
+        return create_openinfo(*v);
     }
 
     auto readdir(const DriverData data, const size_t index) -> Result<OpenInfo> override {
         value_or(dir, data_as<Directory>(data));
         value_or(child, dir->find_nth(index));
-        return OpenInfo(child.first, *this, &child.second, type_from_variant(child.second));
+        return create_openinfo(*child);
     }
 
     auto remove(const DriverData data, const std::string_view name) -> Error override {
@@ -220,7 +230,7 @@ class Driver : public fs::Driver {
     }
 
     Driver() : data(Directory("/")),
-               root("/", *this, &data, FileType::Directory, true) {}
+               root("/", *this, &data, FileType::Directory, 0, true) {}
 };
 
 inline auto new_driver() -> Driver {

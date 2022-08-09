@@ -135,9 +135,9 @@ inline auto test_tmpfs_rw() -> bool {
     {
         auto       buffer = std::string("test data");
         const auto len    = buffer.size();
-        assert(root_file.write(0, len, buffer.data()));
+        assert(!root_file.write(0, len, buffer.data()));
         auto buffer2 = std::string(buffer.size(), 0xFF);
-        assert(root_file.read(0, len, buffer2.data()));
+        assert(!root_file.read(0, len, buffer2.data()));
         assert(buffer == buffer2);
     }
 
@@ -147,9 +147,9 @@ inline auto test_tmpfs_rw() -> bool {
             buffer[i] = i;
         }
         const auto write_head = bytes_per_frame + 1;
-        assert(root_file.write(write_head, buffer.size(), buffer.data()));
+        assert(!root_file.write(write_head, buffer.size(), buffer.data()));
         auto buffer2 = std::array<uint8_t, 256>();
-        assert(root_file.read(write_head, buffer2.size(), buffer2.data()));
+        assert(!root_file.read(write_head, buffer2.size(), buffer2.data()));
         for(auto i = 0; i < buffer2.size(); i += 1) {
             assert(buffer2[i] == buffer[i]);
         }
