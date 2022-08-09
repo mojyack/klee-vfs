@@ -7,6 +7,7 @@ class Error {
         Success = 0,
         IndexOutOfRange,
         NotImplemented,
+        BadChecksum,
         // filesystem
         IOError,
         InvalidData,
@@ -21,6 +22,8 @@ class Error {
         VolumeBusy,
         NotMounted,
         EndOfFile,
+        // FAT
+        NotFAT,
         // block
         NotMBR,
         NotGPT,

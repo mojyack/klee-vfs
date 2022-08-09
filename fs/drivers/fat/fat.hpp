@@ -1,6 +1,4 @@
-#pragma once
-#include "../../block/block.hpp"
-#include "../fs.hpp"
+#include <string>
 
 namespace fs::fat {
 struct BPB {
@@ -38,6 +36,20 @@ struct BPB {
     char     fs_type[8];       // "FAT32   "
     uint8_t  loader[420];
     uint8_t  signature[2];
+
+    struct Summary {
+        uint16_t bytes_per_sector;
+        uint8_t  sectors_per_cluster;
+        uint16_t reserved_sector_count;
+        uint8_t  num_fats;
+        uint32_t total_sectors_32;
+        uint32_t fat_size_32;
+        uint32_t root_cluster;
+    };
+
+    auto summary() const -> Summary {
+        return Summary{bytes_per_sector, sectors_per_cluster, reserved_sector_count, num_fats, total_sectors_32, fat_size_32, root_cluster};
+    }
 } __attribute__((packed));
 
 static_assert(sizeof(BPB) == 512);
@@ -138,41 +150,4 @@ struct LFNEntry {
         return r;
     }
 } __attribute__((packed));
-
-class Driver : public fs::Driver {
-  private:
-    block::BlockDevice& block;
-    OpenInfo            root;
-
-  public:
-    auto read(uintptr_t data, size_t offset, size_t size, void* buffer) -> Error override {
-        return Error::Code::InvalidData;
-    }
-
-    auto write(uintptr_t data, size_t offset, size_t size, const void* buffer) -> Error override {
-        return Error::Code::InvalidData;
-    }
-
-    auto find(const uintptr_t data, const std::string_view name) -> Result<OpenInfo> override {
-        return Error::Code::InvalidData;
-    }
-
-    auto create(const uintptr_t data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
-        return Error::Code::InvalidData;
-    }
-
-    auto readdir(const uintptr_t data, const size_t index) -> Result<OpenInfo> override {
-        return Error::Code::InvalidData;
-    }
-
-    auto remove(const uintptr_t data, const std::string_view name) -> Error override {
-        return Error::Code::InvalidData;
-    }
-
-    auto get_root() -> OpenInfo& override {
-        return root;
-    }
-
-    Driver(block::BlockDevice& block) : block(block), root("/", *this, nullptr, true) {}
-};
 } // namespace fs::fat

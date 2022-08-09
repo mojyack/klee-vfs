@@ -9,7 +9,7 @@
 #include "../log.hpp"
 
 namespace fs {
-enum class FileType {
+enum class FileType : uint32_t {
     Regular,
     Directory,
 };
@@ -35,8 +35,9 @@ class OpenInfo {
     uint32_t    read_count  = 0;
     uint32_t    write_count = 0;
     uint32_t    child_count = 0;
-    OpenInfo*   parent      = nullptr;
-    OpenInfo*   mount       = nullptr;
+    FileType    type;
+    OpenInfo*   parent = nullptr;
+    OpenInfo*   mount  = nullptr;
 
     std::unordered_map<std::string, OpenInfo> children;
 
@@ -55,10 +56,11 @@ class OpenInfo {
         return volume_root;
     }
 
-    OpenInfo(const std::string_view name, Driver& driver, const auto driver_data, const bool volume_root = false) : driver(&driver),
-                                                                                                                    driver_data(reinterpret_cast<uintptr_t>(driver_data)),
-                                                                                                                    volume_root(volume_root),
-                                                                                                                    name(name) {}
+    OpenInfo(const std::string_view name, Driver& driver, const auto driver_data, const FileType type, const bool volume_root = false) : driver(&driver),
+                                                                                                                                         driver_data((uintptr_t)driver_data),
+                                                                                                                                         volume_root(volume_root),
+                                                                                                                                         name(name),
+                                                                                                                                         type(type) {}
 
     // test stuff
     struct Testdata {
@@ -66,12 +68,13 @@ class OpenInfo {
         uint32_t                                  read_count  = 0;
         uint32_t                                  write_count = 0;
         uint32_t                                  child_count = 0;
+        FileType                                  type;
         std::shared_ptr<Testdata>                 mount;
         std::unordered_map<std::string, Testdata> children;
     };
 
     auto test_compare(const Testdata& data) const -> bool {
-        if(name != data.name || read_count != data.read_count || write_count != data.write_count || child_count != data.child_count) {
+        if(name != data.name || read_count != data.read_count || write_count != data.write_count || child_count != data.child_count || type != data.type) {
             return false;
         }
         if(children.size() != data.children.size()) {
@@ -105,15 +108,20 @@ class OpenInfo {
     }
 };
 
+struct DriverData {
+    FileType  type;
+    uintptr_t num;
+};
+
 class Driver {
   public:
-    virtual auto read(uintptr_t data, size_t offset, size_t size, void* buffer) -> Error        = 0;
-    virtual auto write(uintptr_t data, size_t offset, size_t size, const void* buffer) -> Error = 0;
+    virtual auto read(DriverData data, size_t offset, size_t size, void* buffer) -> Error        = 0;
+    virtual auto write(DriverData data, size_t offset, size_t size, const void* buffer) -> Error = 0;
 
-    virtual auto find(uintptr_t data, std::string_view name) -> Result<OpenInfo>                  = 0;
-    virtual auto create(uintptr_t data, std::string_view name, FileType type) -> Result<OpenInfo> = 0;
-    virtual auto readdir(uintptr_t data, size_t index) -> Result<OpenInfo>                        = 0;
-    virtual auto remove(uintptr_t data, std::string_view name) -> Error                           = 0;
+    virtual auto find(DriverData data, std::string_view name) -> Result<OpenInfo>                  = 0;
+    virtual auto create(DriverData data, std::string_view name, FileType type) -> Result<OpenInfo> = 0;
+    virtual auto readdir(DriverData data, size_t index) -> Result<OpenInfo>                        = 0;
+    virtual auto remove(DriverData data, std::string_view name) -> Error                           = 0;
 
     virtual auto get_root() -> OpenInfo& = 0;
 
@@ -124,14 +132,14 @@ inline auto OpenInfo::read(const size_t offset, const size_t size, void* const b
     if(!check_opened(false)) {
         return Error::Code::FileNotOpened;
     }
-    return driver->read(driver_data, offset, size, buffer);
+    return driver->read({type, driver_data}, offset, size, buffer);
 }
 
 inline auto OpenInfo::write(const size_t offset, const size_t size, const void* const buffer) -> Error {
     if(!check_opened(true)) {
         return Error::Code::FileNotOpened;
     }
-    return driver->write(driver_data, offset, size, buffer);
+    return driver->write({type, driver_data}, offset, size, buffer);
 }
 
 inline auto OpenInfo::find(const std::string_view name) -> Result<OpenInfo> {
@@ -139,7 +147,7 @@ inline auto OpenInfo::find(const std::string_view name) -> Result<OpenInfo> {
         return Error::Code::FileNotOpened;
     }
 
-    auto r = driver->find(driver_data, name);
+    auto r = driver->find({type, driver_data}, name);
     if(r) {
         r.as_value().parent = this;
     }
@@ -150,7 +158,7 @@ inline auto OpenInfo::create(const std::string_view name, const FileType type) -
     if(!check_opened(true)) {
         return Error::Code::FileNotOpened;
     }
-    return driver->create(driver_data, name, type);
+    return driver->create({type, driver_data}, name, type);
 }
 
 inline auto OpenInfo::readdir(const size_t index) -> Result<OpenInfo> {
@@ -158,7 +166,7 @@ inline auto OpenInfo::readdir(const size_t index) -> Result<OpenInfo> {
         return Error::Code::FileNotOpened;
     }
 
-    auto r = driver->readdir(driver_data, index);
+    auto r = driver->readdir({type, driver_data}, index);
     if(r) {
         r.as_value().parent = this;
     }
@@ -172,6 +180,6 @@ inline auto OpenInfo::remove(const std::string_view name) -> Error {
     if(children.find(std::string(name)) != children.end()) {
         return Error::Code::FileOpened;
     }
-    return driver->remove(driver_data, name);
+    return driver->remove({type, driver_data}, name);
 }
 } // namespace fs

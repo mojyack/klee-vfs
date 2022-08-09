@@ -37,12 +37,17 @@ auto main(const int argc, const char* const argv[]) -> int {
     if(!partitions) {
         printf("cannot find partitions: %d\n", static_cast<int>(partitions.as_error()));
     }
+
+    auto fat_volume = (block::BlockDevice*)nullptr;
     for(const auto& p : partitions.as_value()) {
         auto info = p.device->get_info();
         printf("partition found: %luMib Type=%d\n", info.bytes_per_sector * info.total_sectors / 1024 / 1024, p.filesystem);
+        if(p.filesystem == block::gpt::Filesystem::FAT32) {
+            fat_volume = p.device.get();
+        }
     }
 
-    test();
+    test(fat_volume);
     // auto controller = fs::Controller();
     // auto tmpfs      = fs::tmp::Driver();
     // controller._root_mount(tmpfs);

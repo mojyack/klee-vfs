@@ -1,14 +1,14 @@
 #include "fs/control.hpp"
+#include "fs/drivers/fat/driver.hpp"
 
-#define open_handle(var, expr)     \
+#ifdef value_or
+#undef value_or
+#endif
+
+#define value_or(var, expr)        \
     auto var##_open_result = expr; \
     assert(var##_open_result);     \
     auto& var = var##_open_result.as_value();
-
-#define open_handle_again(var, expr) \
-    var##_open_result = expr;        \
-    assert(var##_open_result);       \
-    var = var##_open_result.as_value();
 
 #define assert(a)                                        \
     if(!(a)) {                                           \
@@ -17,11 +17,12 @@
     }
 
 using Testdata         = fs::OpenInfo::Testdata;
+using Type             = fs::FileType;
 constexpr auto nomount = std::nullopt;
 
 // test data construction
-inline auto tdc(const std::string_view path, const uint32_t read, const uint32_t write, const uint32_t child, std::optional<Testdata> mount = nomount, std::vector<Testdata> children = {}) -> Testdata {
-    auto r = Testdata{std::string(path), read, write, child, {}, {}};
+inline auto tdc(const std::string_view path, const uint32_t read, const uint32_t write, const uint32_t child, const Type type, std::optional<Testdata> mount = nomount, std::vector<Testdata> children = {}) -> Testdata {
+    auto r = Testdata{std::string(path), read, write, child, type, {}, {}};
     if(mount) {
         r.mount.reset(new fs::OpenInfo::Testdata);
         *r.mount.get() = std::move(mount.value());
@@ -33,7 +34,7 @@ inline auto tdc(const std::string_view path, const uint32_t read, const uint32_t
 }
 
 inline auto create(fs::Controller& controller, const std::string_view dirname, const std::string_view filename, const fs::FileType type) -> bool {
-    open_handle(handle, controller.open(dirname, fs::OpenMode::Write));
+    value_or(handle, controller.open(dirname, fs::OpenMode::Write));
     assert(!handle.create(filename, type));
     assert(!controller.close(handle));
     return true;
@@ -41,7 +42,7 @@ inline auto create(fs::Controller& controller, const std::string_view dirname, c
 
 inline auto test_nested_mount() -> bool {
     auto controller = fs::Controller();
-    assert(controller._compare_root(tdc("/", 0, 0, 0)));
+    assert(controller._compare_root(tdc("/", 0, 0, 0, Type::Directory)));
     auto tmpfs1 = fs::tmp::new_driver();
     assert(!controller.mount("/", tmpfs1));
 
@@ -49,55 +50,55 @@ inline auto test_nested_mount() -> bool {
 
     auto tmpfs2 = fs::tmp::new_driver();
     assert(!controller.mount("/tmp", tmpfs2));
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 0, 1, nomount, {
-                                                                                              tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 0, 0)),
-                                                                                          }))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc(/*tmp1*/ "/", 0, 0, 1, Type::Directory, nomount, {
+                                                                                                                                tdc("tmp", 0, 1, 0, Type::Directory, tdc(/*tmp2*/ "/", 0, 0, 0, Type::Directory)),
+                                                                                                                            }))));
 
     auto tmpfs3 = fs::tmp::new_driver();
     assert(!controller.mount("/tmp", tmpfs3));
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 0, 2, nomount, {
-                                                                                              tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 1, 0, tdc(/*tmp3*/ "/", 0, 0, 0))),
-                                                                                          }))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc(/*tmp1*/ "/", 0, 0, 2, Type::Directory, nomount, {
+                                                                                                                                tdc("tmp", 0, 1, 0, Type::Directory, tdc(/*tmp2*/ "/", 0, 1, 0, Type::Directory, tdc(/*tmp3*/ "/", 0, 0, 0, Type::Directory))),
+                                                                                                                            }))));
 
     assert(!controller.unmount("/tmp"));
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 0, 1, nomount, {
-                                                                                              tdc("tmp", 0, 1, 0, tdc(/*tmp2*/ "/", 0, 0, 0)),
-                                                                                          }))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc(/*tmp1*/ "/", 0, 0, 1, Type::Directory, nomount, {
+                                                                                                                                tdc("tmp", 0, 1, 0, Type::Directory, tdc(/*tmp2*/ "/", 0, 0, 0, Type::Directory)),
+                                                                                                                            }))));
 
     assert(!controller.unmount("/tmp"));
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc(/*tmp1*/ "/", 0, 0, 0))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc(/*tmp1*/ "/", 0, 0, 0, Type::Directory))));
 
     assert(!controller.unmount("/"));
-    assert(controller._compare_root(tdc("/", 0, 0, 0)));
+    assert(controller._compare_root(tdc("/", 0, 0, 0, Type::Directory)));
     return true;
 }
 
 inline auto test_nested_open_close() -> bool {
     auto controller = fs::Controller();
-    assert(controller._compare_root(tdc("/", 0, 0, 0)));
+    assert(controller._compare_root(tdc("/", 0, 0, 0, Type::Directory)));
     auto tmpfs = fs::tmp::new_driver();
     assert(!controller.mount("/", tmpfs));
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc("/", 0, 0, 0, Type::Directory))));
 
     assert(create(controller, "/", "dir", fs::FileType::Directory));
     assert(create(controller, "/", "dir2", fs::FileType::Directory));
     assert(create(controller, "/dir", "dir", fs::FileType::Directory));
 
-    open_handle(root_dir, controller.open("/dir", fs::OpenMode::Read));
-    open_handle(root_dir2, controller.open("/dir2", fs::OpenMode::Read));
-    open_handle(root_dir_dir, controller.open("/dir/dir", fs::OpenMode::Read));
+    value_or(root_dir, controller.open("/dir", fs::OpenMode::Read));
+    value_or(root_dir2, controller.open("/dir2", fs::OpenMode::Read));
+    value_or(root_dir_dir, controller.open("/dir/dir", fs::OpenMode::Read));
 
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 3, nomount, {
-                                                                                     tdc("dir", 1, 0, 1, nomount, {
-                                                                                                                      tdc("dir", 1, 0, 0),
-                                                                                                                  }),
-                                                                                     tdc("dir2", 1, 0, 0),
-                                                                                 }))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc("/", 0, 0, 3, Type::Directory, nomount, {
+                                                                                                                       tdc("dir", 1, 0, 1, Type::Directory, nomount, {
+                                                                                                                                                                         tdc("dir", 1, 0, 0, Type::Directory),
+                                                                                                                                                                     }),
+                                                                                                                       tdc("dir2", 1, 0, 0, Type::Directory),
+                                                                                                                   }))));
     assert(!controller.close(root_dir));
     assert(!controller.close(root_dir2));
     assert(!controller.close(root_dir_dir));
 
-    assert(controller._compare_root(tdc("/", 0, 1, 0, tdc("/", 0, 0, 0))));
+    assert(controller._compare_root(tdc("/", 0, 1, 0, Type::Directory, tdc("/", 0, 0, 0, Type::Directory))));
 
     return true;
 }
@@ -107,7 +108,7 @@ inline auto test_open_error() -> bool {
     auto tmpfs      = fs::tmp::new_driver();
     controller.mount("/", tmpfs);
 
-    open_handle(root, controller.open("/", fs::OpenMode::Read));
+    value_or(root, controller.open("/", fs::OpenMode::Read));
     assert(root.create("dir", fs::FileType::Directory) == Error::Code::FileNotOpened);
     return true;
 }
@@ -129,7 +130,7 @@ inline auto test_tmpfs_rw() -> bool {
     controller.mount("/", tmpfs);
 
     assert(create(controller, "/", "file", fs::FileType::Regular));
-    open_handle(root_file, controller.open("file", fs::OpenMode::Write));
+    value_or(root_file, controller.open("file", fs::OpenMode::Write));
 
     {
         auto       buffer = std::string("test data");
@@ -157,16 +158,47 @@ inline auto test_tmpfs_rw() -> bool {
     return true;
 }
 
-inline auto test() -> bool {
+inline auto test_fat_rw(block::BlockDevice& block) -> bool {
+    auto controller = fs::Controller();
+    value_or(fatfs, fs::fat::new_driver(block));
+    controller.mount("/", *fatfs.get());
+
+    value_or(root, controller.open("/", fs::OpenMode::Read));
+    for(auto i = 0;; i += 1) {
+        const auto r = root.readdir(i);
+        if(!r) {
+            const auto e = r.as_error();
+            if(e == Error::Code::EndOfFile) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+        auto& o = r.as_value();
+
+        static auto expected_names = std::array{"EFI", "kernel.elf", "NvVars", "MEMMAP"};
+        assert(i < 4);
+        assert(o.name == expected_names[i]);
+    }
+    return true;
+}
+
+inline auto test(block::BlockDevice* const fat_volume) -> bool {
     assert(test_nested_mount());
     assert(test_nested_open_close());
     assert(test_open_error());
     assert(test_exist_error());
     assert(test_tmpfs_rw());
+
+    if(fat_volume == nullptr) {
+        puts("fat volume not found, skipping test");
+    } else {
+        assert(test_fat_rw(*fat_volume));
+    }
+
     puts("all tests passed\n");
     return true;
 }
 
 #undef assert
-#undef open_handle
-#undef open_handle_again
+#undef value_or

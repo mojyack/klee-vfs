@@ -4,6 +4,7 @@
 #include <variant>
 #include <vector>
 
+#include "../../macro.hpp"
 #include "../../memory-manager.hpp"
 #include "../fs.hpp"
 
@@ -140,47 +141,48 @@ class Directory : public Object {
     Directory(std::string name) : Object(std::move(name)) {}
 };
 
-#define unwrap(var, func)              \
-    auto result##var = func;           \
-    if(!result##var) {                 \
-        return result##var.as_error(); \
-    }                                  \
-    auto& var = result##var.as_value();
-
 class Driver : public fs::Driver {
   private:
     std::variant<File, Directory> data;
     OpenInfo                      root;
 
     template <FileObject T>
-    auto data_as(const uintptr_t data) -> Result<T*> {
-        auto& obj = *reinterpret_cast<std::variant<File, Directory>*>(data);
+    auto data_as(const DriverData& data) -> Result<T*> {
+        auto& obj = *reinterpret_cast<std::variant<File, Directory>*>(data.num);
         if(!std::holds_alternative<T>(obj)) {
             return std::is_same_v<T, File> ? Error::Code::NotFile : Error::Code::NotDirectory;
         }
         return &std::get<T>(obj);
     }
 
+    static auto type_from_variant(const std::variant<File, Directory>& variant) -> FileType {
+        if(std::holds_alternative<File>(variant)) {
+            return FileType::Regular;
+        } else {
+            return FileType::Directory;
+        }
+    }
+
   public:
-    auto read(const uintptr_t data, const size_t offset, const size_t size, void* const buffer) -> Error override {
-        unwrap(file, data_as<File>(data));
+    auto read(const DriverData data, const size_t offset, const size_t size, void* const buffer) -> Error override {
+        value_or(file, data_as<File>(data));
         return file->read(offset, size, static_cast<uint8_t*>(buffer));
     }
 
-    auto write(const uintptr_t data, const size_t offset, const size_t size, const void* const buffer) -> Error override {
-        unwrap(file, data_as<File>(data));
+    auto write(const DriverData data, const size_t offset, const size_t size, const void* const buffer) -> Error override {
+        value_or(file, data_as<File>(data));
         file->resize(offset + size);
         return file->write(offset, size, static_cast<const uint8_t*>(buffer));
     }
 
-    auto find(const uintptr_t data, const std::string_view name) -> Result<OpenInfo> override {
-        unwrap(dir, data_as<Directory>(data));
+    auto find(const DriverData data, const std::string_view name) -> Result<OpenInfo> override {
+        value_or(dir, data_as<Directory>(data));
         const auto p = dir->find(name);
-        return p != nullptr ? Result(OpenInfo(name, *this, p)) : Error::Code::NoSuchFile;
+        return p != nullptr ? Result(OpenInfo(name, *this, p, type_from_variant(*p))) : Error::Code::NoSuchFile;
     }
 
-    auto create(const uintptr_t data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
-        unwrap(dir, data_as<Directory>(data));
+    auto create(const DriverData data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
+        value_or(dir, data_as<Directory>(data));
         if(dir->find(name) != nullptr) {
             return Error::Code::FileExists;
         }
@@ -196,17 +198,17 @@ class Driver : public fs::Driver {
         default:
             return Error::Code::NotImplemented;
         }
-        return OpenInfo(name, *this, v);
+        return OpenInfo(name, *this, v, type);
     }
 
-    auto readdir(const uintptr_t data, const size_t index) -> Result<OpenInfo> override {
-        unwrap(dir, data_as<Directory>(data));
-        unwrap(child, dir->find_nth(index));
-        return OpenInfo(child.first, *this, &child.second);
+    auto readdir(const DriverData data, const size_t index) -> Result<OpenInfo> override {
+        value_or(dir, data_as<Directory>(data));
+        value_or(child, dir->find_nth(index));
+        return OpenInfo(child.first, *this, &child.second, type_from_variant(child.second));
     }
 
-    auto remove(const uintptr_t data, const std::string_view name) -> Error override {
-        unwrap(dir, data_as<Directory>(data));
+    auto remove(const DriverData data, const std::string_view name) -> Error override {
+        value_or(dir, data_as<Directory>(data));
         if(!dir->remove(name)) {
             return Error::Code::NoSuchFile;
         }
@@ -218,10 +220,8 @@ class Driver : public fs::Driver {
     }
 
     Driver() : data(Directory("/")),
-               root("/", *this, &data, true) {}
+               root("/", *this, &data, FileType::Directory, true) {}
 };
-
-#undef unwrap
 
 inline auto new_driver() -> Driver {
     return Driver();
