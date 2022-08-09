@@ -187,6 +187,13 @@ inline auto test_fat_rw(block::BlockDevice& block) -> bool {
 
     value_or(root_efi, controller.open("/EFI", fs::OpenMode::Read));
     assert(test_ls(root_efi, std::array{".", "..", "BOOT"}));
+
+    value_or(root_memmap, controller.open("/MEMMAP", fs::OpenMode::Read));
+    const auto size = root_memmap.get_size();
+    auto buffer = std::vector<uint8_t>(size);
+    assert(!root_memmap.read(0, size, buffer.data()));
+    printf("%lu, %s\n", size, buffer.data());
+
     return true;
 }
 

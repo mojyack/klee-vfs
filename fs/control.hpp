@@ -119,6 +119,10 @@ class Handle {
         return data->remove(name);
     }
 
+    auto get_size() const -> size_t {
+        return data->size;
+    }
+
     Handle(OpenInfo* const data, const OpenMode mode) : data(data), mode(mode) {}
 };
 

@@ -201,7 +201,8 @@ class Driver : public fs::Driver {
     auto openinfo_from_dinfo(const DirectoryInfo& d) -> OpenInfo {
         const auto type    = d.attribute & Attribute::Directory ? FileType::Directory : FileType::Regular;
         const auto cluster = d.cluster == 0 ? bpb.root_cluster : d.cluster;
-        return OpenInfo(d.name, *this, cluster, type);
+        const auto size    = type == FileType::Directory ? 0 : d.size;
+        return OpenInfo(d.name, *this, cluster, type, size);
     }
 
   public:
@@ -218,11 +219,56 @@ class Driver : public fs::Driver {
         return Error();
     }
 
-    auto read(DriverData data, size_t offset, size_t size, void* buffer) -> Error override {
-        return Error::Code::InvalidData;
+    auto read(const DriverData data, const size_t offset, size_t size, void* const buffer_) -> Error override {
+        if(data.type != FileType::Regular) {
+            return Error::Code::InvalidData;
+        }
+
+        if(offset + size > data.size) {
+            return Error::Code::EndOfFile;
+        }
+
+        auto       op                = ClusterOperator(bpb, *block);
+        auto       buffer            = static_cast<uint8_t*>(buffer_);
+        const auto bytes_per_cluster = op.get_cluster_size_bytes();
+        auto       cluster           = static_cast<uint32_t>(data.num);
+        if(!increment_fat(cluster, offset / bytes_per_cluster, bpb, *block)) {
+            return Error::Code::EndOfFile;
+        }
+        auto read_buffer = std::vector<uint8_t>(bytes_per_cluster);
+
+        {
+            const auto offset_in_cluster = offset % bytes_per_cluster;
+            const auto size_in_cluster   = bytes_per_cluster - offset_in_cluster;
+            const auto copy_len          = size < size_in_cluster ? size : size_in_cluster;
+            error_or(op.read_cluster(cluster, read_buffer.data()));
+            memcpy(buffer, read_buffer.data() + offset_in_cluster, copy_len);
+            buffer += copy_len;
+            size -= copy_len;
+            if(!increment_fat(cluster, 1, bpb, *block)) {
+                return Error::Code::EndOfFile;
+            }
+        }
+
+        while(size >= bytes_per_cluster) {
+            error_or(op.read_cluster(cluster, read_buffer.data()));
+            memcpy(buffer, read_buffer.data(), bytes_per_cluster);
+            buffer += bytes_per_cluster;
+            size -= bytes_per_cluster;
+            if(size != 0 && !increment_fat(cluster, 1, bpb, *block)) {
+                return Error::Code::EndOfFile;
+            }
+        }
+
+        if(size != 0) {
+            error_or(op.read_cluster(cluster, read_buffer.data()));
+            memcpy(buffer, read_buffer.data(), size);
+        }
+
+        return Error();
     }
 
-    auto write(DriverData data, size_t offset, size_t size, const void* buffer) -> Error override {
+    auto write(const DriverData data, const size_t offset, const size_t size, const void* const buffer) -> Error override {
         return Error::Code::NotImplemented;
     }
 
@@ -275,7 +321,7 @@ class Driver : public fs::Driver {
     }
 
     Driver(block::BlockDevice& block) : block(&block),
-                                        root("/", *this, nullptr, FileType::Directory, true) {}
+                                        root("/", *this, nullptr, FileType::Directory, 0, true) {}
 };
 
 inline auto new_driver(block::BlockDevice& block) -> Result<std::unique_ptr<Driver>> {

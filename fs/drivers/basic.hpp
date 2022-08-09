@@ -35,7 +35,7 @@ class Driver : public fs::Driver {
         return root;
     }
 
-    Driver() : root("/", *this, nullptr, FileType::Directory, true) {}
+    Driver() : root("/", *this, nullptr, FileType::Directory, 0, true) {}
 };
 
 inline auto new_driver() -> Driver {
