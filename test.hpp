@@ -158,14 +158,10 @@ inline auto test_tmpfs_rw() -> bool {
     return true;
 }
 
-inline auto test_fat_rw(block::BlockDevice& block) -> bool {
-    auto controller = fs::Controller();
-    value_or(fatfs, fs::fat::new_driver(block));
-    controller.mount("/", *fatfs.get());
-
-    value_or(root, controller.open("/", fs::OpenMode::Read));
-    for(auto i = 0;; i += 1) {
-        const auto r = root.readdir(i);
+template <size_t size>
+inline auto test_ls(fs::Handle handle, std::array<const char*, size> expected) -> bool {
+    for(auto i = 0; i < expected.size(); i += 1) {
+        const auto r = handle.readdir(i);
         if(!r) {
             const auto e = r.as_error();
             if(e == Error::Code::EndOfFile) {
@@ -176,10 +172,21 @@ inline auto test_fat_rw(block::BlockDevice& block) -> bool {
         }
         auto& o = r.as_value();
 
-        static auto expected_names = std::array{"EFI", "kernel.elf", "NvVars", "MEMMAP"};
-        assert(i < 4);
-        assert(o.name == expected_names[i]);
+        assert(o.name == expected[i]);
     }
+    return true;
+}
+
+inline auto test_fat_rw(block::BlockDevice& block) -> bool {
+    auto controller = fs::Controller();
+    value_or(fatfs, fs::fat::new_driver(block));
+    controller.mount("/", *fatfs.get());
+
+    value_or(root, controller.open("/", fs::OpenMode::Read));
+    assert(test_ls(root, std::array{"EFI", "kernel.elf", "NvVars", "MEMMAP"}));
+
+    value_or(root_efi, controller.open("/EFI", fs::OpenMode::Read));
+    assert(test_ls(root_efi, std::array{".", "..", "BOOT"}));
     return true;
 }
 

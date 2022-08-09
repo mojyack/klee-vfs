@@ -198,7 +198,7 @@ class Driver : public fs::Driver {
 
     OpenInfo root;
 
-    auto openinfo_from_dinfo(DirectoryInfo& d) -> OpenInfo {
+    auto openinfo_from_dinfo(const DirectoryInfo& d) -> OpenInfo {
         const auto type    = d.attribute & Attribute::Directory ? FileType::Directory : FileType::Regular;
         const auto cluster = d.cluster == 0 ? bpb.root_cluster : d.cluster;
         return OpenInfo(d.name, *this, cluster, type);
@@ -223,15 +223,34 @@ class Driver : public fs::Driver {
     }
 
     auto write(DriverData data, size_t offset, size_t size, const void* buffer) -> Error override {
-        return Error::Code::InvalidData;
+        return Error::Code::NotImplemented;
     }
 
     auto find(const DriverData data, const std::string_view name) -> Result<OpenInfo> override {
-        return Error::Code::InvalidData;
+        if(data.type != FileType::Directory) {
+            return Error::Code::InvalidData;
+        }
+        auto iterator = DirectoryIterator(static_cast<size_t>(data.num), bpb, *block);
+        while(true) {
+            const auto dinfo_result = iterator.read();
+            if(!dinfo_result) {
+                const auto e = dinfo_result.as_error();
+                if(e == Error::Code::EndOfFile) {
+                    return Error::Code::NoSuchFile;
+                } else {
+                    return e;
+                }
+            }
+            const auto& dinfo = dinfo_result.as_value();
+            if(dinfo.name == name) {
+                return openinfo_from_dinfo(dinfo);
+            }
+        }
+        return Error::Code::NoSuchFile;
     }
 
     auto create(const DriverData data, const std::string_view name, const FileType type) -> Result<OpenInfo> override {
-        return Error::Code::InvalidData;
+        return Error::Code::NotImplemented;
     }
 
     auto readdir(const DriverData data, const size_t index) -> Result<OpenInfo> override {
@@ -248,7 +267,7 @@ class Driver : public fs::Driver {
     }
 
     auto remove(const DriverData data, const std::string_view name) -> Error override {
-        return Error::Code::InvalidData;
+        return Error::Code::NotImplemented;
     }
 
     auto get_root() -> OpenInfo& override {
