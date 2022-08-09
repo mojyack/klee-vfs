@@ -34,7 +34,7 @@ auto main(const int argc, const char* const argv[]) -> int {
     }
 
     auto       dummy_device = block::cache::Device<block::dummy::DummyBlockDevice>(argv[1]);
-    const auto partitions   = block::gpt::find_partitions(&dummy_device);
+    const auto partitions   = block::gpt::find_partitions(dummy_device);
     if(!partitions) {
         printf("cannot find partitions: %d\n", static_cast<int>(partitions.as_error()));
     }
