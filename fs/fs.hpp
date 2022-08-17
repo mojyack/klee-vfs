@@ -34,7 +34,6 @@ class OpenInfo {
     std::string name;
     uint32_t    read_count  = 0;
     uint32_t    write_count = 0;
-    uint32_t    child_count = 0;
     FileType    type;
     size_t      size;
     OpenInfo*   parent = nullptr;
@@ -50,7 +49,7 @@ class OpenInfo {
     auto remove(std::string_view name) -> Error;
 
     auto is_busy() const -> bool {
-        return read_count != 0 || write_count != 0 || child_count != 0 || mount != nullptr;
+        return read_count != 0 || write_count != 0 || !children.empty() || mount != nullptr;
     }
 
     auto is_volume_root() const -> bool {
@@ -69,14 +68,13 @@ class OpenInfo {
         std::string                               name;
         uint32_t                                  read_count  = 0;
         uint32_t                                  write_count = 0;
-        uint32_t                                  child_count = 0;
         FileType                                  type;
         std::shared_ptr<Testdata>                 mount;
         std::unordered_map<std::string, Testdata> children;
     };
 
     auto test_compare(const Testdata& data) const -> bool {
-        if(name != data.name || read_count != data.read_count || write_count != data.write_count || child_count != data.child_count || type != data.type) {
+        if(name != data.name || read_count != data.read_count || write_count != data.write_count || type != data.type) {
             return false;
         }
         if(children.size() != data.children.size()) {

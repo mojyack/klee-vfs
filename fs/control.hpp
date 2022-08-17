@@ -90,12 +90,6 @@ class Handle {
             result = &children.emplace(v.name, v).first->second;
         }
 
-        auto node = result->parent;
-        while(node != nullptr) {
-            node->child_count += 1;
-            node = node->parent;
-        }
-
         return Handle(result, mode);
     }
 
@@ -185,9 +179,7 @@ class Controller {
             node->write_count -= 1;
             break;
         }
-        node->child_count += 1; // prevents the child_count of the trailing node from being decremented
         while(node != nullptr) {
-            node->child_count -= 1;
             auto parent = node->parent;
             if(!node->is_busy() && !node->is_volume_root() && parent != nullptr) {
                 parent->children.erase(node->name);
