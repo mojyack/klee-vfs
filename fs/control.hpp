@@ -87,7 +87,7 @@ class Handle {
 
         if(created_info) {
             auto& v = created_info.value();
-            result = &children.emplace(v.name, v).first->second;
+            result  = &children.emplace(v.name, v).first->second;
         }
 
         return Handle(result, mode);
@@ -122,14 +122,9 @@ class Handle {
 
 class Controller {
   private:
-    struct MountData {
-        std::string path;
-        Handle      handle;
-    };
-
-    basic::Driver          basic_driver;
-    OpenInfo&              root;
-    std::vector<MountData> mount_list;
+    basic::Driver       basic_driver;
+    OpenInfo&           root;
+    std::vector<Handle> mountpoints;
 
     auto open_root(const OpenMode mode) -> Result<Handle> {
         auto info = follow_mountpoints(&root);
@@ -139,9 +134,41 @@ class Controller {
         return Handle(info, mode);
     }
 
+    static auto find_top_mountpoint(OpenInfo* node) -> Result<OpenInfo*> {
+        if(node->mount == nullptr) {
+            return Error::Code::NotMounted;
+        }
+        while(node->mount->mount != nullptr) {
+            node = node->mount;
+        }
+        return node;
+    }
+
+    auto open_parent_directory(std::vector<std::string_view> elms, const OpenMode mode) -> Result<Handle> {
+        if(elms.empty()) {
+            return open_root(mode);
+        }
+
+        auto dirname = std::span<std::string_view>(elms.begin(), elms.size() - 1);
+        auto result  = open_root(OpenMode::Read);
+        if(!result) {
+            return result.as_error();
+        }
+
+        for(const auto& d : dirname) {
+            auto handle = result.as_value();
+            result      = handle.open(d, OpenMode::Read);
+            close(handle);
+            if(!result) {
+                return result;
+            }
+        }
+        return result;
+    }
+
   public:
     auto open(const std::string_view path, const OpenMode mode) -> Result<Handle> {
-        auto elms     = split_path(path);
+        auto elms = split_path(path);
         if(elms.empty()) {
             return open_root(mode);
         }
@@ -179,52 +206,72 @@ class Controller {
             node->write_count -= 1;
             break;
         }
-        while(node != nullptr) {
-            auto parent = node->parent;
-            if(!node->is_busy() && !node->is_volume_root() && parent != nullptr) {
-                parent->children.erase(node->name);
+        while(node->parent != nullptr) {
+            if(node->is_busy() || node->is_volume_root()) {
+                break;
             }
-            node = parent;
+
+            if(node->parent == nullptr) {
+                // bug
+                // this node should be a volume root
+                break;
+            }
+
+            node->parent->children.erase(node->name);
+            node = node->parent;
         }
         return Error();
     }
 
     auto mount(const std::string_view path, Driver& driver) -> Error {
         auto volume_root = &driver.get_root();
-        if(volume_root->parent != nullptr) {
-            return Error::Code::VolumeMounted;
-        }
 
         auto open_result = open(path, OpenMode::Write);
         if(!open_result) {
             return open_result.as_error();
         }
-        const auto handle   = open_result.as_value();
-        handle.data->mount  = volume_root;
-        volume_root->parent = handle.data->parent;
-        mount_list.emplace_back(MountData{std::string(path), handle});
+        const auto handle  = open_result.as_value();
+        handle.data->mount = volume_root;
+        mountpoints.emplace_back(handle);
         return Error();
     }
 
-    auto unmount(const std::string_view path) -> Error {
-        for(auto i = mount_list.rbegin(); i != mount_list.rend(); i += 1) {
-            if(i->path != path) {
-                continue;
+    auto unmount(const std::string_view path) -> Result<const Driver*> {
+        auto mountpoint = (OpenInfo*)(nullptr);
+        auto elms       = split_path(path);
+        if(elms.empty()) {
+            value_or(node, find_top_mountpoint(&root));
+            mountpoint = node;
+        } else {
+            value_or(parent, open_parent_directory(elms, OpenMode::Read));
+            error_or(close(parent));
+            auto& children = parent.data->children;
+            if(const auto p = children.find(std::string(elms.back())); p == children.end()) {
+                return Error::Code::NoSuchFile;
+            } else {
+                value_or(node, find_top_mountpoint(&p->second));
+                mountpoint = node;
             }
-            const auto mount_point = i->handle.data;
-            const auto volume_root = mount_point->mount;
+        }
+
+        for(auto m = mountpoints.begin(); m != mountpoints.end(); m += 1) {
+            if(m->data != mountpoint) {
+                continue; 
+            }
+
+            const auto volume_root = mountpoint->mount;
             if(volume_root->is_busy()) {
                 return Error::Code::VolumeBusy;
             }
-            mount_point->mount  = nullptr;
-            volume_root->parent = nullptr;
+            mountpoint->mount = nullptr;
 
-            auto e = Error();
-            if(e = close(i->handle); e) {
+            if(const auto e = close(*m)) {
                 logger(LogLevel::Error, "failed to close mountpoint, this is kernel bug: %d\n", e.as_int());
+                mountpoints.erase(m);
+                return e;
             }
-            mount_list.erase(std::next(i).base());
-            return e;
+            mountpoints.erase(m);
+            return volume_root->read_driver();
         }
         return Error::Code::NotMounted;
     }

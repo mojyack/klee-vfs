@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "../error.hpp"
 #include "../log.hpp"
@@ -31,13 +32,13 @@ class OpenInfo {
     }
 
   public:
-    std::string name;
-    uint32_t    read_count  = 0;
-    uint32_t    write_count = 0;
-    FileType    type;
-    size_t      size;
-    OpenInfo*   parent = nullptr;
-    OpenInfo*   mount  = nullptr;
+    std::string            name;
+    uint32_t               read_count  = 0;
+    uint32_t               write_count = 0;
+    FileType               type;
+    size_t                 size;
+    OpenInfo*              parent = nullptr;
+    OpenInfo*              mount = nullptr;
 
     std::unordered_map<std::string, OpenInfo> children;
 
@@ -54,6 +55,10 @@ class OpenInfo {
 
     auto is_volume_root() const -> bool {
         return volume_root;
+    }
+
+    auto read_driver() const -> const Driver* {
+        return driver;
     }
 
     OpenInfo(const std::string_view name, Driver& driver, const auto driver_data, const FileType type, const size_t size, const bool volume_root = false) : driver(&driver),

@@ -60,15 +60,15 @@ inline auto test_nested_mount() -> bool {
                                                                                                                           tdc("tmp", 0, 1, Type::Directory, tdc(/*tmp2*/ "/", 0, 1, Type::Directory, tdc(/*tmp3*/ "/", 0, 0, Type::Directory))),
                                                                                                                       }))));
 
-    assert(!controller.unmount("/tmp"));
+    assert(controller.unmount("/tmp"));
     assert(controller._compare_root(tdc("/", 0, 1, Type::Directory, tdc(/*tmp1*/ "/", 0, 0, Type::Directory, nomount, {
                                                                                                                           tdc("tmp", 0, 1, Type::Directory, tdc(/*tmp2*/ "/", 0, 0, Type::Directory)),
                                                                                                                       }))));
 
-    assert(!controller.unmount("/tmp"));
+    assert(controller.unmount("/tmp"));
     assert(controller._compare_root(tdc("/", 0, 1, Type::Directory, tdc(/*tmp1*/ "/", 0, 0, Type::Directory))));
 
-    assert(!controller.unmount("/"));
+    assert(controller.unmount("/"));
     assert(controller._compare_root(tdc("/", 0, 0, Type::Directory)));
     return true;
 }
@@ -197,12 +197,46 @@ inline auto test_fat_rw(block::BlockDevice& block) -> bool {
     return true;
 }
 
+inline auto test_duplicated_mount() -> bool {
+    constexpr auto d = Type::Directory;
+
+    auto controller = fs::Controller();
+    assert(controller._compare_root(tdc("/", 0, 0, d)));
+    auto tmpfs_root = fs::tmp::new_driver();
+    assert(!controller.mount("/", tmpfs_root));
+
+    assert(create(controller, "/", "a", fs::FileType::Directory));
+    assert(create(controller, "/", "b", fs::FileType::Directory));
+    assert(create(controller, "/b", "bb", fs::FileType::Directory));
+
+    auto tmpfs = fs::tmp::new_driver();
+    assert(!controller.mount("/a", tmpfs));
+    assert(!controller.mount("/b/bb", tmpfs));
+    assert(controller._compare_root(tdc("/", 0, 1, d, tdc(/*tmpfs_root*/ "/", 0, 0, d, nomount, {
+                                                                                                    tdc("a", 0, 1, d, tdc(/*tmpfs*/ "/", 0, 0, d)),
+                                                                                                    tdc("b", 0, 0, d, nomount, {
+                                                                                                                                   tdc("bb", 0, 1, d, tdc(/*tmpfs*/ "/", 0, 0, d)),
+                                                                                                                               }),
+                                                                                                }))));
+    auto tmpfs2 = fs::tmp::new_driver();
+    assert(!controller.mount("/a", tmpfs2));
+    assert(controller._compare_root(tdc("/", 0, 1, d, tdc(/*tmpfs_root*/ "/", 0, 0, d, nomount, {
+                                                                                                    tdc("a", 0, 1, d, tdc(/*tmpfs*/ "/", 0, 1, d, tdc(/*tmpfs2*/"/", 0, 0, d))),
+                                                                                                    tdc("b", 0, 0, d, nomount, {
+                                                                                                                                   tdc("bb", 0, 1, d, tdc(/*tmpfs*/ "/", 0, 1, d, tdc(/*tmpfs2*/"/", 0, 0, d))),
+                                                                                                                               }),
+                                                                                                }))));
+
+    return true;
+}
+
 inline auto test(block::BlockDevice* const fat_volume) -> bool {
     assert(test_nested_mount());
     assert(test_nested_open_close());
     assert(test_open_error());
     assert(test_exist_error());
     assert(test_tmpfs_rw());
+    assert(test_duplicated_mount());
 
     if(fat_volume == nullptr) {
         puts("fat volume not found, skipping test");
