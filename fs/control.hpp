@@ -144,7 +144,7 @@ class Controller {
         return node;
     }
 
-    auto open_parent_directory(std::vector<std::string_view> elms, const OpenMode mode) -> Result<Handle> {
+    auto open_parent_directory(std::vector<std::string_view>& elms, const OpenMode mode) -> Result<Handle> {
         if(elms.empty()) {
             return open_root(mode);
         }
@@ -173,25 +173,10 @@ class Controller {
             return open_root(mode);
         }
 
-        auto dirname  = std::span<std::string_view>(elms.begin(), elms.size() - 1);
         auto filename = elms.back();
+        value_or(handle, open_parent_directory(elms, mode));
 
-        auto result = open_root(OpenMode::Read);
-        if(!result) {
-            return result.as_error();
-        }
-
-        for(const auto& d : dirname) {
-            auto handle = result.as_value();
-            result      = handle.open(d, OpenMode::Read);
-            close(handle);
-            if(!result) {
-                return result.as_error();
-            }
-        }
-
-        auto handle = result.as_value();
-        result      = handle.open(filename, mode);
+        auto result = handle.open(filename, mode);
         close(handle);
         return result;
     }
@@ -256,7 +241,7 @@ class Controller {
 
         for(auto m = mountpoints.begin(); m != mountpoints.end(); m += 1) {
             if(m->data != mountpoint) {
-                continue; 
+                continue;
             }
 
             const auto volume_root = mountpoint->mount;
